@@ -1,0 +1,137 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Find Closest Vietnamese Restaurant</title>
+  <style>
+    html, body { height: 100%; margin: 0; }
+    #map { height: 100%; width: 100%; }
+    .widget {
+      position: absolute; top: 16px; left: 16px; z-index: 5;
+      background: white; padding: 12px; border-radius: 12px;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+      font-family: Arial, sans-serif;
+    }
+    .widget h1 { font-size: 16px; margin: 0 0 4px; }
+    .widget .info { font-size: 14px; margin-bottom: 4px; }
+    .widget button { padding: 6px 10px; border: none; border-radius: 6px; background: #2563eb; color: white; cursor: pointer; font-size: 13px; margin-right: 6px; }
+  </style>
+</head>
+<body>
+  <div id="map"></div>
+  <div class="widget">
+    <h1>Closest Vietnamese Restaurant</h1>
+    <div class="info" id="restaurant-name">Locating...</div>
+    <div class="info" id="restaurant-distance"></div>
+    <button id="myloc">Use My Location</button>
+    <button id="myloc">Use my location</button>
+    <button id="recenter">Recenter</button>
+  </div>
+  <script>
+    let map, placesService, geometryService;
+    let userMarker, placeMarker, arrowLine;
+    let userPos;
+
+    function metersToHuman(m) {
+      return m < 1000 ? `${Math.round(m)} m` : `${(m/1000).toFixed(1)} km`;
+    }
+
+    function updateInfo(name, distance) {
+      document.getElementById('restaurant-name').textContent = name || 'Not found';
+      document.getElementById('restaurant-distance').textContent = distance ? `Distance: ${distance}` : '';
+    }
+
+    function drawArrow(from, to) {
+      if (arrowLine) arrowLine.setMap(null);
+      arrowLine = new google.maps.Polyline({
+        path: [from, to],
+        strokeOpacity: 0.7,
+        strokeWeight: 4,
+        icons: [{ icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 3 }, offset: '100%' }],
+        map
+      });
+    }
+
+    function searchRestaurant() {
+      placesService.nearbySearch({
+        location: userPos,
+        rankBy: google.maps.places.RankBy.DISTANCE,
+        type: 'restaurant',
+        keyword: 'vietnamese'
+      }, (results, status) => {
+        if (status !== google.maps.places.PlacesServiceStatus.OK || !results[0]) {
+          updateInfo('No restaurant found', '');
+          return;
+        }
+        const place = results[0];
+        const placeLoc = place.geometry.location;
+        if (placeMarker) placeMarker.setMap(null);
+        placeMarker = new google.maps.Marker({ position: placeLoc, map, title: place.name });
+        const distance = geometryService.computeDistanceBetween(userPos, placeLoc);
+        updateInfo(place.name, metersToHuman(distance));
+        drawArrow(userPos, placeLoc);
+      });
+    }
+
+    function setUserPosition(latLng, recenter = true) {
+      userPos = latLng;
+      if (!userMarker) {
+        userMarker = new google.maps.Marker({
+          position: userPos,
+          map,
+          draggable: true,
+          icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: '#2563eb', fillOpacity: 1, strokeColor: '#1e40af', strokeWeight: 2 }
+        });
+        userMarker.addListener('dragend', e => {
+          setUserPosition(e.latLng, false);
+          searchRestaurant();
+        });
+      } else {
+        userMarker.setPosition(userPos);
+      }
+      if (recenter) map.panTo(userPos);
+    }
+
+    function locateAndSearch() {
+      navigator.geolocation.getCurrentPosition(pos => {
+        setUserPosition(new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude));
+        searchRestaurant();
+      }, () => {
+        alert('Could not get location. Click on the map to set your position.');
+      });
+    }
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById('map'), { center: { lat: 0, lng: 0 }, zoom: 15 });
+      placesService = new google.maps.places.PlacesService(map);
+      geometryService = google.maps.geometry.spherical;
+      locateAndSearch();
+      map.addListener('click', e => {
+        setUserPosition(e.latLng);
+        searchRestaurant();
+      });
+      document.getElementById('recenter').addEventListener('click', () => {
+        if (userPos) map.panTo(userPos);
+      });
+      document.getElementById('myloc').addEventListener('click', async () => {
+        try {
+          const pos = await new Promise((resolve, reject) => {
+            if (!navigator.geolocation) return reject(new Error('Geolocation not supported'));
+            navigator.geolocation.getCurrentPosition(resolve, reject, { enableHighAccuracy: true, timeout: 10000 });
+          });
+          setUserPosition(new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude));
+          searchRestaurant();
+        } catch (e) {
+          alert('Could not access your location. You can still click the map or drag the marker.');
+        }
+      });
+      document.getElementById('myloc').addEventListener('click', () => {
+        locateAndSearch();
+      });
+    }
+    window.initMap = initMap;
+  </script>
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyCpggoIWRHNA360nnPA3gFtQ3TVOMgzbkU&libraries=places,geometry&callback=initMap"></script>
+</body>
+</html>
