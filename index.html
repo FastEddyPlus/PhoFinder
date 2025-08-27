@@ -44,11 +44,168 @@
   </div>
 
   <script>
-    // Existing JavaScript logic remains unchanged for map init, markers, search, etc.
-    // (Assume full code from previous working version)
+    // --- Configuration ---
+    const KEYWORD = 'vietnamese';
+    const PLACE_TYPE = 'restaurant';
+
+    // Globals
+    let map, placesService;
+    let userMarker = null, placeMarker = null, arrowLine = null;
+    let userPos = null;
+
+    // Utilities
+    const $ = (id) => document.getElementById(id);
+    const setStatus = (t) => { $('status').textContent = t; };
+    const metersToHuman = (m) => m < 1000 ? `${Math.round(m)} m` : `${(m/1000).toFixed((m/1000)<10?1:0)} km`;
+
+    function placeMarkerAt(position, options = {}) {
+      return new google.maps.Marker({ position, map, ...options });
+    }
+
+    function drawArrow(from, to) {
+      if (arrowLine) arrowLine.setMap(null);
+      arrowLine = new google.maps.Polyline({
+        path: [from, to], strokeOpacity: 0.7, strokeWeight: 4,
+        icons: [{ icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 3 }, offset: '100%' }]
+      });
+      arrowLine.setMap(map);
+    }
+
+    function clearPlaceArtifacts() {
+      if (placeMarker) { placeMarker.setMap(null); placeMarker = null; }
+      if (arrowLine) { arrowLine.setMap(null); arrowLine = null; }
+    }
+
+    function updateInfo(nameText, subText) {
+      $('name').textContent = nameText || '—';
+      $('distance').textContent = subText || '—';
+    }
+
+    function setUserPosition(latLng, recenter = true) {
+      userPos = latLng;
+      if (!userMarker) {
+        userMarker = placeMarkerAt(userPos, {
+          title: 'You are here', draggable: true,
+          icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: '#2563eb', fillOpacity: 1, strokeColor: '#1e40af', strokeWeight: 2 }
+        });
+        userMarker.addListener('dragend', (e) => { setUserPosition(e.latLng, false); runSearch(); });
+      } else {
+        userMarker.setPosition(userPos);
+      }
+      if (recenter) map.panTo(userPos);
+    }
+
+    function nearbyVietnamese(location) {
+      return new Promise((resolve, reject) => {
+        placesService.nearbySearch({
+          location,
+          rankBy: google.maps.places.RankBy.DISTANCE,
+          type: PLACE_TYPE,
+          keyword: KEYWORD
+        }, (results, status) => {
+          if (status !== google.maps.places.PlacesServiceStatus.OK) {
+            reject(new Error('Places search failed: ' + status));
+          } else {
+            resolve(results || []);
+          }
+        });
+      });
+    }
+
+    function bestByWalking(orig, results) {
+      return new Promise((resolve, reject) => {
+        if (!results.length) return reject(new Error('No Vietnamese restaurants found nearby.'));
+        const svc = new google.maps.DistanceMatrixService();
+        const destinations = results.slice(0, 20).map(r => r.geometry.location);
+        svc.getDistanceMatrix({
+          origins: [orig],
+          destinations,
+          travelMode: google.maps.TravelMode.WALKING,
+          unitSystem: google.maps.UnitSystem.METRIC,
+        }, (res, status) => {
+          if (status !== 'OK' || !res.rows || !res.rows[0]) return reject(new Error('Distance Matrix failed.'));
+          const elems = res.rows[0].elements;
+          let bestIdx = -1, bestSec = Infinity;
+          elems.forEach((el, i) => {
+            if (el.status === 'OK' && el.duration && el.duration.value < bestSec) {
+              bestSec = el.duration.value; bestIdx = i;
+            }
+          });
+          if (bestIdx === -1) return reject(new Error('No walkable routes found.'));
+          resolve({ place: results[bestIdx], element: elems[bestIdx] });
+        });
+      });
+    }
+
+    async function runSearch() {
+      try {
+        clearPlaceArtifacts();
+        setStatus('Searching nearby Vietnamese restaurants…');
+        const results = await nearbyVietnamese(userPos);
+        const { place, element } = await bestByWalking(userPos, results);
+        const placeLoc = place.geometry.location;
+        placeMarker = placeMarkerAt(placeLoc, { title: place.name });
+        const distText = element.distance ? element.distance.text : '';
+        const durText = element.duration ? element.duration.text : '';
+        updateInfo(place.name, `Walking: ${durText} • ${distText}`);
+        drawArrow(userPos, placeLoc);
+        const bounds = new google.maps.LatLngBounds(); bounds.extend(userPos); bounds.extend(placeLoc); map.fitBounds(bounds, 80);
+      } catch (e) {
+        setStatus(e.message);
+        updateInfo('—', '—');
+      }
+    }
+
+    function getCurrentPosition(options = { enableHighAccuracy: true, timeout: 12000 }) {
+      return new Promise((resolve, reject) => {
+        if (!navigator.geolocation) return reject(new Error('Geolocation not supported by this browser.'));
+        navigator.geolocation.getCurrentPosition(resolve, reject, options);
+      });
+    }
+
+    function initMap() {
+      map = new google.maps.Map(document.getElementById('map'), { center: { lat: 0, lng: 0 }, zoom: 15 });
+      placesService = new google.maps.places.PlacesService(map);
+
+      // Click to drop yourself anywhere
+      map.addListener('click', (e) => { setUserPosition(e.latLng); runSearch(); });
+
+      // Try geolocate first
+      (async () => {
+        try {
+          const pos = await getCurrentPosition();
+          const here = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
+          setUserPosition(here);
+          $('recenter').disabled = false;
+          await runSearch();
+        } catch (err) {
+          setStatus('Click anywhere on the map to set your location.');
+          map.setZoom(3);
+        }
+      })();
+
+      // Buttons
+      $('recenter').addEventListener('click', () => { if (userPos) map.panTo(userPos); });
+      $('myloc').addEventListener('click', async () => {
+        setStatus('Getting your current location…');
+        try {
+          const pos = await getCurrentPosition();
+          const here = new google.maps.LatLng(pos.coords.latitude, pos.coords.longitude);
+          setUserPosition(here);
+          await runSearch();
+        } catch (e) {
+          setStatus('Location blocked. You can still click the map to set your position.');
+        }
+      });
+    }
+
+    // Ensure the callback can find it
+    window.initMap = initMap;
   </script>
 
   <!-- Placeholder key to be replaced in build pipeline -->
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=__GMAPS_API_KEY__&libraries=places,geometry&callback=initMap"></script>
+<!-- Placeholder key to be replaced in build pipeline -->
   <script async defer src="https://maps.googleapis.com/maps/api/js?key=__GMAPS_API_KEY__&libraries=places,geometry&callback=initMap"></script>
 </body>
 </html>
