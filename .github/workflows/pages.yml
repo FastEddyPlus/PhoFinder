@@ -1,0 +1,58 @@
+name: Deploy to GitHub Pages
+
+on:
+  push:
+    branches: [ main ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: "pages"
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # Make sure the secret exists (fail fast with a clear message)
+      - name: Check secret
+        run: |
+          if [ -z "${{ secrets.GMAPS_API_KEY }}" ]; then
+            echo "❌ Missing GitHub Secret GMAPS_API_KEY (Settings → Secrets and variables → Actions)."
+            exit 1
+          fi
+
+      # Inject the Google Maps API key into your HTML
+      - name: Inject Google Maps API key
+        env:
+          GMAPS_API_KEY: ${{ secrets.GMAPS_API_KEY }}
+        run: |
+          mkdir -p dist
+          # Replace the placeholder in index.html (which should contain __GMAPS_API_KEY__)
+          sed "s#__GMAPS_API_KEY__#${GMAPS_API_KEY}#g" index.html > dist/index.html
+          # Copy any extra assets (optional)
+          [ -d assets ] && cp -R assets dist/ || true
+          [ -d css ] && cp -R css dist/ || true
+          [ -d js ] && cp -R js dist/ || true
+          # If your file is named differently (e.g., index.template.html), tweak the sed input path.
+
+      - name: Upload artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
