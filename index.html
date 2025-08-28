@@ -10,8 +10,7 @@
     .widget {
       position: absolute; top: 16px; left: 16px; z-index: 5;
       background: #fff; border-radius: 14px; box-shadow: 0 6px 18px rgba(0,0,0,.15);
-      padding: 12px 14px;
-      font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
+      padding: 12px 14px; font-family: ui-sans-serif, -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif;
       max-width: 360px; display: grid; grid-template-columns: 1fr auto; gap: 8px 12px; align-items: center;
     }
     .widget h1 { margin: 0; font-size: 16px; font-weight: 700; line-height: 1.2; }
@@ -19,15 +18,11 @@
     .widget .badge { display: inline-block; padding: 4px 8px; border-radius: 999px; background: #f1f5f9; font-size: 12px; }
     .widget button { border: 0; background: #111827; color: #fff; padding: 8px 10px; border-radius: 10px; cursor: pointer; font-size: 13px; }
     .widget button[disabled] { opacity: .6; cursor: not-allowed; }
-    .label {
-      position: absolute; transform: translate(-50%, -100%); background: #111827; color: #fff;
-      padding: 6px 8px; border-radius: 8px; font-size: 12px; white-space: nowrap; pointer-events: none;
-    }
+    .label { position: absolute; transform: translate(-50%, -100%); background: #111827; color: #fff; padding: 6px 8px; border-radius: 8px; font-size: 12px; white-space: nowrap; pointer-events: none; }
   </style>
 </head>
 <body>
   <div id="map"></div>
-
   <div class="widget" id="info">
     <div>
       <h1>PhoFinder</h1>
@@ -36,51 +31,38 @@
     <button id="myloc">Use my location</button>
     <button id="recenter" disabled>Recenter</button>
     <div class="sub"><span class="badge" id="name">—</span> <span class="badge" id="distance">—</span></div>
+    <div class="sub" id="steps"></div>
   </div>
 
   <script>
-    // --- Config ---
     const KEYWORD = 'vietnamese';
     const PLACE_TYPE = 'restaurant';
-
-    // Globals
-    let map, placesService;
+    let map, placesService, directionsService, directionsRenderer;
     let userMarker = null, placeMarker = null, arrowLine = null, labelOverlay = null;
     let userPos = null;
 
-    // Utilities
     const $ = (id) => document.getElementById(id);
     const setStatus = (t) => { $('status').textContent = t; };
     const metersToHuman = (m) => m < 1000 ? `${Math.round(m)} m` : `${(m/1000).toFixed((m/1000)<10?1:0)} km`;
 
-    function placeMarkerAt(position, options = {}) {
-      return new google.maps.Marker({ position, map, ...options });
-    }
-
+    function placeMarkerAt(position, options = {}) { return new google.maps.Marker({ position, map, ...options }); }
     function drawArrow(from, to) {
       if (arrowLine) arrowLine.setMap(null);
-      arrowLine = new google.maps.Polyline({
-        path: [from, to],
-        strokeOpacity: 0.7, strokeWeight: 4,
-        icons: [{ icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 3 }, offset: '100%' }]
-      });
+      arrowLine = new google.maps.Polyline({ path: [from, to], strokeOpacity: 0.7, strokeWeight: 4, icons: [{ icon: { path: google.maps.SymbolPath.FORWARD_CLOSED_ARROW, scale: 3 }, offset: '100%' }] });
       arrowLine.setMap(map);
     }
-
     function attachLabel(position, text) {
-      // Remove previous overlay
       if (labelOverlay) labelOverlay.setMap(null);
       const div = document.createElement('div');
       div.className = 'label';
       div.textContent = text;
-
       class LabelOverlay extends google.maps.OverlayView {
         onAdd() { this.getPanes().floatPane.appendChild(div); }
         draw() {
           const proj = this.getProjection();
           const pt = proj.fromLatLngToDivPixel(position);
           div.style.left = pt.x + 'px';
-          div.style.top  = pt.y + 'px';
+          div.style.top = pt.y + 'px';
           div.style.position = 'absolute';
         }
         onRemove() { if (div.parentNode) div.parentNode.removeChild(div); }
@@ -89,10 +71,32 @@
       labelOverlay.setMap(map);
     }
 
-    function clearPlaceArtifacts() {
+    function renderStepsFromDirections(dirResult){
+      const c = $('steps');
+      if (!c) return;
+      try {
+        const leg = dirResult.routes[0].legs[0];
+        const steps = leg.steps || [];
+        if (!steps.length){ c.innerHTML = ''; return; }
+        const items = steps.map(s => {
+          const text = (s.instructions || '').replace(/<[^>]+>/g,'');
+          const dist = s.distance && s.distance.text ? ` — ${s.distance.text}` : '';
+          return `<li>${text}${dist}</li>`;
+        }).join('');
+        c.innerHTML = `<ol style="margin:8px 0 0 18px; padding:0;">${items}</ol>`;
+      } catch (e) {
+        $('steps').innerHTML = '';
+      }
+    }
+
+    function clearSteps(){ const c=$('steps'); if(c) c.innerHTML=''; }
+
+    function clearPlaceArtifacts(){
       if (placeMarker) { placeMarker.setMap(null); placeMarker = null; }
       if (arrowLine)   { arrowLine.setMap(null);   arrowLine   = null; }
       if (labelOverlay){ labelOverlay.setMap(null); labelOverlay= null; }
+      if (directionsRenderer) { directionsRenderer.set('directions', null); }
+      clearSteps();
     }
 
     function updateInfo(nameText, subText) {
@@ -105,8 +109,7 @@
       if (!userMarker) {
         userMarker = placeMarkerAt(userPos, {
           title: 'You are here', draggable: true,
-          icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8,
-                  fillColor: '#2563eb', fillOpacity: 1, strokeColor: '#1e40af', strokeWeight: 2 }
+          icon: { path: google.maps.SymbolPath.CIRCLE, scale: 8, fillColor: '#2563eb', fillOpacity: 1, strokeColor: '#1e40af', strokeWeight: 2 }
         });
         userMarker.addListener('dragend', (e) => { setUserPosition(e.latLng, false); runSearch(); });
       } else {
@@ -117,12 +120,7 @@
 
     function nearbyVietnamese(location) {
       return new Promise((resolve, reject) => {
-        placesService.nearbySearch({
-          location,
-          rankBy: google.maps.places.RankBy.DISTANCE,
-          type: PLACE_TYPE,
-          keyword: KEYWORD
-        }, (results, status) => {
+        placesService.nearbySearch({ location, rankBy: google.maps.places.RankBy.DISTANCE, type: PLACE_TYPE, keyword: KEYWORD }, (results, status) => {
           if (status !== google.maps.places.PlacesServiceStatus.OK) {
             reject(new Error('Places search failed: ' + status));
           } else {
@@ -164,10 +162,8 @@
         if (!userPos) return;
         clearPlaceArtifacts();
         setStatus('Searching nearby Vietnamese restaurants…');
-
         const results = await nearbyVietnamese(userPos);
         let chosenPlace, dmElement;
-
         try {
           const byWalk = await bestByWalking(userPos, results);
           chosenPlace = byWalk.place;
@@ -177,7 +173,7 @@
           setStatus('Distance Matrix unavailable, using straight-line distance.');
           const nearest = results.reduce((best, cur) => {
             const a = userPos; const b = cur.geometry.location;
-            const d = (google.maps.geometry && google.maps.geometry.spherical)
+            const d = google.maps.geometry && google.maps.geometry.spherical
               ? google.maps.geometry.spherical.computeDistanceBetween(a, b)
               : Math.hypot(a.lat() - b.lat(), a.lng() - b.lng());
             return (!best || d < best.d) ? { place: cur, d } : best;
@@ -193,12 +189,28 @@
         const durText  = dmElement.duration ? dmElement.duration.text  : '';
         const label    = durText ? `Walking: ${durText} • ${distText}` : distText;
         updateInfo(chosenPlace.name, label);
-        drawArrow(userPos, placeLoc);
         attachLabel(placeLoc, `${chosenPlace.name} • ${label}`);
 
-        const bounds = new google.maps.LatLngBounds();
-        bounds.extend(userPos); bounds.extend(placeLoc);
-        map.fitBounds(bounds, 80);
+        try {
+          const res = await directionsService.route({
+            origin: userPos,
+            destination: placeLoc,
+            travelMode: google.maps.TravelMode.WALKING
+          });
+          directionsRenderer.setDirections(res);
+          renderStepsFromDirections(res);
+          const rb = res.routes && res.routes[0] && res.routes[0].bounds;
+          if (rb) {
+            map.fitBounds(rb, 80);
+          } else {
+            const bounds = new google.maps.LatLngBounds(); bounds.extend(userPos); bounds.extend(placeLoc); map.fitBounds(bounds, 80);
+          }
+        } catch (e) {
+          console.warn('Directions failed, fallback to arrow:', e);
+          clearSteps();
+          drawArrow(userPos, placeLoc);
+          const bounds = new google.maps.LatLngBounds(); bounds.extend(userPos); bounds.extend(placeLoc); map.fitBounds(bounds, 80);
+        }
       } catch (e) {
         setStatus(e.message);
         updateInfo('—', '—');
@@ -215,11 +227,12 @@
     function initMap() {
       map = new google.maps.Map(document.getElementById('map'), { center: { lat: 0, lng: 0 }, zoom: 15 });
       placesService = new google.maps.places.PlacesService(map);
+      directionsService = new google.maps.DirectionsService();
+      directionsRenderer = new google.maps.DirectionsRenderer({ suppressMarkers: true, preserveViewport: true, polylineOptions: { strokeOpacity: 0.9, strokeWeight: 5 } });
+      directionsRenderer.setMap(map);
 
-      // Click to drop yourself anywhere
       map.addListener('click', (e) => { setUserPosition(e.latLng); runSearch(); });
 
-      // Try geolocate first
       (async () => {
         try {
           const pos  = await getCurrentPosition();
@@ -233,7 +246,6 @@
         }
       })();
 
-      // Buttons
       $('recenter').addEventListener('click', () => { if (userPos) map.panTo(userPos); });
       $('myloc').addEventListener('click', async () => {
         setStatus('Getting your current location…');
@@ -248,13 +260,9 @@
       });
     }
 
-    // Expose for callback
     window.initMap = initMap;
   </script>
 
-  <!-- Load Maps exactly once (hardcoded key). Make sure this is the ONLY loader on the page. -->
-  <script async defer
-    src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDS_pl74xQdpEKXyf1NKsfgVhBBuN-nyg0&v=weekly&libraries=places,geometry&callback=initMap">
-  </script>
+  <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDS_pl74xQdpEKXyf1NKsfgVhBBuN-nyg0&v=weekly&libraries=places,geometry&callback=initMap"></script>
 </body>
 </html>
