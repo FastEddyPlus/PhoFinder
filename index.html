@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>PhoFinder</title>
+  <title>Closest Vietnamese Restaurant (Walking)</title>
   <style>
     html, body { height: 100%; margin: 0; }
     #map { height: 100%; width: 100%; }
@@ -19,19 +19,25 @@
     .widget button { border: 0; background: #111827; color: #fff; padding: 8px 10px; border-radius: 10px; cursor: pointer; font-size: 13px; }
     .widget button[disabled] { opacity: .6; cursor: not-allowed; }
     .label { position: absolute; transform: translate(-50%, -100%); background: #111827; color: #fff; padding: 6px 8px; border-radius: 8px; font-size: 12px; white-space: nowrap; pointer-events: none; }
+  .steps-panel{ max-height:40vh; overflow:auto; border-top:1px solid #eee; margin-top:6px; padding-top:6px; }
+    #toggle-steps{ background:#f8fafc; color:#111827; border:1px solid #e5e7eb; }
+    @media (min-width: 640px){ .steps-panel{ max-height:30vh; } }
   </style>
 </head>
 <body>
   <div id="map"></div>
   <div class="widget" id="info">
     <div>
-      <h1>PhoFinder</h1>
+      <h1>Closest Vietnamese restaurant</h1>
       <div class="sub" id="status">Locating you…</div>
     </div>
     <button id="myloc">Use my location</button>
     <button id="recenter" disabled>Recenter</button>
     <div class="sub"><span class="badge" id="name">—</span> <span class="badge" id="distance">—</span></div>
-    <div class="sub" id="steps"></div>
+    <button id="toggle-steps" aria-expanded="false" disabled>Show steps</button>
+    <div class="sub steps-panel" id="steps-panel" hidden>
+      <div id="steps"></div>
+    </div>
   </div>
 
   <script>
@@ -72,24 +78,44 @@
     }
 
     function renderStepsFromDirections(dirResult){
-      const c = $('steps');
-      if (!c) return;
-      try {
+      const list = document.getElementById('steps');
+      const panel = document.getElementById('steps-panel');
+      const btn = document.getElementById('toggle-steps');
+      if (!list) return;
+      try{
         const leg = dirResult.routes[0].legs[0];
         const steps = leg.steps || [];
-        if (!steps.length){ c.innerHTML = ''; return; }
-        const items = steps.map(s => {
-          const text = (s.instructions || '').replace(/<[^>]+>/g,'');
-          const dist = s.distance && s.distance.text ? ` — ${s.distance.text}` : '';
-          return `<li>${text}${dist}</li>`;
-        }).join('');
+        if (!steps.length){ list.innerHTML=''; if (panel){ panel.setAttribute('hidden',''); } if (btn){ btn.disabled=true; btn.textContent='Show steps'; btn.setAttribute('aria-expanded','false'); } return; }
+        const items = steps.map(s=>{
+          const text=(s.instructions||'').replace(/<[^>]+>/g,'');
+          const dist=s.distance&&s.distance.text?` — ${s.distance.text}`:'';
+          return `<li>${text}${dist}</li>`;}).join('');
+        list.innerHTML = `<ol style=\"margin:8px 0 0 18px; padding:0;\">${items}</ol>`;
+        if (btn){
+          btn.disabled=false;
+          // Auto-expand on larger screens; keep collapsed on mobile
+          const shouldExpand = window.innerWidth >= 768;
+          if (panel){
+            if (shouldExpand){ panel.removeAttribute('hidden'); btn.textContent='Hide steps'; btn.setAttribute('aria-expanded','true'); }
+            else { panel.setAttribute('hidden',''); btn.textContent='Show steps'; btn.setAttribute('aria-expanded','false'); }
+          }
+        }
+      }catch(e){ if(panel){ panel.setAttribute('hidden',''); } if(btn){ btn.disabled=true; btn.textContent='Show steps'; btn.setAttribute('aria-expanded','false'); } list.innerHTML=''; }
+    }).join('');
         c.innerHTML = `<ol style="margin:8px 0 0 18px; padding:0;">${items}</ol>`;
       } catch (e) {
         $('steps').innerHTML = '';
       }
     }
 
-    function clearSteps(){ const c=$('steps'); if(c) c.innerHTML=''; }
+    function clearSteps(){
+      const list = document.getElementById('steps');
+      const panel = document.getElementById('steps-panel');
+      const btn = document.getElementById('toggle-steps');
+      if (list) list.innerHTML='';
+      if (panel) panel.setAttribute('hidden','');
+      if (btn){ btn.disabled=true; btn.textContent='Show steps'; btn.setAttribute('aria-expanded','false'); }
+    }
 
     function clearPlaceArtifacts(){
       if (placeMarker) { placeMarker.setMap(null); placeMarker = null; }
@@ -247,6 +273,17 @@
       })();
 
       $('recenter').addEventListener('click', () => { if (userPos) map.panTo(userPos); });
+      // Toggle steps (collapsible)
+      (function(){
+        const btn = document.getElementById('toggle-steps');
+        const panel = document.getElementById('steps-panel');
+        if (!btn || !panel) return;
+        btn.addEventListener('click', () => {
+          const isHidden = panel.hasAttribute('hidden');
+          if (isHidden){ panel.removeAttribute('hidden'); btn.textContent='Hide steps'; btn.setAttribute('aria-expanded','true'); }
+          else { panel.setAttribute('hidden',''); btn.textContent='Show steps'; btn.setAttribute('aria-expanded','false'); }
+        });
+      })();
       $('myloc').addEventListener('click', async () => {
         setStatus('Getting your current location…');
         try {
@@ -266,3 +303,4 @@
   <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyDS_pl74xQdpEKXyf1NKsfgVhBBuN-nyg0&v=weekly&libraries=places,geometry&callback=initMap"></script>
 </body>
 </html>
+
